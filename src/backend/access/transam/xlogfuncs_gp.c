@@ -164,3 +164,22 @@ gp_create_restore_point(PG_FUNCTION_ARGS)
 
 	SRF_RETURN_DONE(funcctx);
 }
+
+/*
+ * TODO: describe this function later
+ */
+Datum
+pg_xlog_replay_pause_on_restore_point(PG_FUNCTION_ARGS)
+{
+	if (!RecoveryInProgress())
+		ereport(ERROR,
+		        (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				        errmsg("recovery is not in progress"),
+				        errhint("Recovery control functions can only be executed during recovery.")));
+
+	SetRecoveryPauseRestorePointName(text_to_cstring(PG_GETARG_TEXT_P(0)));
+
+	SetRecoveryPause(false);
+
+	PG_RETURN_VOID();
+}

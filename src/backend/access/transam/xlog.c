@@ -113,6 +113,7 @@ int			wal_level = WAL_LEVEL_MINIMAL;
 int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
+bool		EnableRestorePointRecoveryPause = false;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -699,6 +700,8 @@ typedef struct XLogCtlData
 	TimestampTz currentChunkStartTime;
 	/* Are we requested to pause recovery? */
 	bool		recoveryPause;
+	/* GPDB: describe later */
+	char recoveryPauseRestorePointName[MAXFNAMELEN];
 
 	/*
 	 * lastFpwDisableRecPtr points to the start of the last replayed
@@ -936,6 +939,9 @@ static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
+
+/* GPDB: describe later */
+static bool recoveryPauseOnRestorePoint(XLogReaderState *record);
 
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
@@ -5634,6 +5640,37 @@ recoveryStopsBefore(XLogReaderState *record)
 	return stopsHere;
 }
 
+static bool
+recoveryPauseOnRestorePoint(XLogReaderState *record) {
+	uint8 info;
+	uint8 rmid;
+
+	// TODO: Should the EnableRestorePointRecoveryPause GUC be checked here instead?
+
+	info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	rmid = XLogRecGetRmid(record);
+
+	/*
+	 * There can be many restore points that share the same name; we stop at
+	 * the first one.
+	 */
+	if (rmid == RM_XLOG_ID && info == XLOG_RESTORE_POINT)
+	{
+		xl_restore_point *recordRestorePointData;
+
+		recordRestorePointData = (xl_restore_point *) XLogRecGetData(record);
+
+		if (strcmp(recordRestorePointData->rp_name,
+				XLogCtl->recoveryPauseRestorePointName) == 0)
+		{
+			SetRecoveryPause(true);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /*
  * Same as recoveryStopsBefore, but called after applying the record.
  *
@@ -5812,6 +5849,16 @@ SetRecoveryPause(bool recoveryPause)
 {
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->recoveryPause = recoveryPause;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+void
+SetRecoveryPauseRestorePointName(char *recoveryPauseRestorePointName)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	strlcpy(XLogCtl->recoveryPauseRestorePointName,
+			recoveryPauseRestorePointName,
+			MAXFNAMELEN);
 	SpinLockRelease(&XLogCtl->info_lck);
 }
 
@@ -6971,7 +7018,10 @@ StartupXLOG(void)
 		XLogCtl->lastReplayedTLI = XLogCtl->replayEndTLI;
 		XLogCtl->recoveryLastXTime = 0;
 		XLogCtl->currentChunkStartTime = 0;
-		XLogCtl->recoveryPause = false;
+		XLogCtl->recoveryPause = EnableRestorePointRecoveryPause;
+		strlcpy(XLogCtl->recoveryPauseRestorePointName,
+				"",
+				MAXFNAMELEN);
 		SpinLockRelease(&XLogCtl->info_lck);
 
 		/* Also ensure XLogReceiptTime has a sane value */
@@ -7075,6 +7125,10 @@ StartupXLOG(void)
 				 * adding another spinlock cycle to prevent that.
 				 */
 				if (((volatile XLogCtlData *) XLogCtl)->recoveryPause)
+					recoveryPausesHere();
+
+				if (EnableRestorePointRecoveryPause
+					&& recoveryPauseOnRestorePoint(xlogreader))
 					recoveryPausesHere();
 
 				/*
@@ -7200,8 +7254,11 @@ StartupXLOG(void)
 					TransactionIdIsValid(record->xl_xid))
 					RecordKnownAssignedTransactionIds(record->xl_xid);
 
-				/* Now apply the WAL record itself */
-				RmgrTable[record->xl_rmid].rm_redo(xlogreader);
+				if (!(EnableRestorePointRecoveryPause && CheckForStandbyTrigger()))
+				{
+					/* Now apply the WAL record itself */
+					RmgrTable[record->xl_rmid].rm_redo(xlogreader);
+				}
 
 				/* Pop the error context stack */
 				error_context_stack = errcallback.previous;

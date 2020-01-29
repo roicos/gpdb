@@ -314,4 +314,6 @@ extern bool IsRoleMirror(void);
 extern void SignalPromote(void);
 extern XLogRecPtr XLogLastInsertBeginLoc(void);
 extern void initialize_wal_bytes_written(void);
+extern void SetRecoveryPauseRestorePointName(char *recoveryPauseRestorePointName);
+
 #endif   /* XLOG_H */

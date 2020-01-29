@@ -2584,6 +2584,10 @@ retry1:
 			}
 
 			recptr = last_xlog_replay_location();
+
+			if (pmState == PM_HOT_STANDBY)
+				break;
+
 			ereport(FATAL,
 					(errcode(ERRCODE_MIRROR_READY),
 					 errmsg(POSTMASTER_IN_RECOVERY_MSG),

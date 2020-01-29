@@ -926,5 +926,8 @@ DESCR("Legacy cdbhash function");
 DATA(insert OID = 6998 ( gp_create_restore_point  PGNSP PGUID 12 1 1000 0 0 f f f f t t v u 1 0 2249 "25" _null_ _null_ _null_ _null_ _null_ gp_create_restore_point _null_ _null_ _null_ n a ));
 DESCR("Create a named restore point on all segments");
 
+/* pg_xlog_replay_pause_on_restore_point(text) => void */
+DATA(insert OID = 7144 ( pg_xlog_replay_pause_on_restore_point  PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 2278 "25" _null_ _null_ _null_ _null_ _null_ pg_xlog_replay_pause_on_restore_point _null_ _null_ _null_ n a ));
+DESCR("pause WAL replay on user-provided restore point");
 
 /* TIDYCAT_END_PG_PROC_GEN */
