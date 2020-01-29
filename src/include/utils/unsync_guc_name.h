@@ -533,3 +533,4 @@
 		"xmloption",
 		"zero_damaged_pages",
 		"ssl_renegotiation_limit",
+		"gp_enable_restore_point_recovery_pause",
