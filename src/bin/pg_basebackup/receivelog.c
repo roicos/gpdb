@@ -32,6 +32,8 @@
 static int	walfile = -1;
 static char mypipename[12] = "/tmp/myfifo";
 static char current_walfile_name[MAXPGPATH] = "";
+static char lastLSNFile[13] = "/tmp/lastLSN";
+static int lastLSNfd = -1;
 static bool reportFlushPosition = false;
 static XLogRecPtr lastFlushPosition = InvalidXLogRecPtr;
 
@@ -55,38 +57,6 @@ static long CalculateCopyStreamSleeptime(int64 now, int standby_message_timeout,
 static bool ReadEndOfStreamingResult(PGresult *res, XLogRecPtr *startpos,
 						 uint32 *timeline);
 
-static bool
-mark_file_as_archived(const char *basedir, const char *fname)
-{
-	int			fd;
-	static char tmppath[MAXPGPATH];
-
-	snprintf(tmppath, sizeof(tmppath), "%s/archive_status/%s.done",
-			 basedir, fname);
-
-	fd = open(tmppath, O_WRONLY | O_CREAT | PG_BINARY, S_IRUSR | S_IWUSR);
-	if (fd < 0)
-	{
-		fprintf(stderr, _("%s: could not create archive status file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-		return false;
-	}
-
-	if (fsync(fd) != 0)
-	{
-		fprintf(stderr, _("%s: could not fsync file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-
-		close(fd);
-
-		return false;
-	}
-
-	close(fd);
-
-	return true;
-}
-
 /*
  * Close the current WAL file (if open), and rename it to the correct
  * filename if it's complete. On failure, prints an error message to stderr
@@ -95,10 +65,10 @@ mark_file_as_archived(const char *basedir, const char *fname)
 static bool
 close_walfile(StreamCtl *stream, XLogRecPtr pos)
 {
-	off_t		currpos;
-
 	if (walfile == -1)
 		return true;
+
+	close(lastLSNfd);
 
 	if (close(walfile) != 0)
 	{
@@ -110,139 +80,6 @@ close_walfile(StreamCtl *stream, XLogRecPtr pos)
 	walfile = -1;
 
 	lastFlushPosition = pos;
-	return true;
-}
-
-
-/*
- * Check if a timeline history file exists.
- */
-static bool
-existsTimeLineHistoryFile(StreamCtl *stream)
-{
-	char		path[MAXPGPATH];
-	char		histfname[MAXFNAMELEN];
-	int			fd;
-
-	/*
-	 * Timeline 1 never has a history file. We treat that as if it existed,
-	 * since we never need to stream it.
-	 */
-	if (stream->timeline == 1)
-		return true;
-
-	TLHistoryFileName(histfname, stream->timeline);
-
-	snprintf(path, sizeof(path), "%s/%s", stream->basedir, histfname);
-
-	fd = open(path, O_RDONLY | PG_BINARY, 0);
-	if (fd < 0)
-	{
-		if (errno != ENOENT)
-			fprintf(stderr, _("%s: could not open timeline history file \"%s\": %s\n"),
-					progname, path, strerror(errno));
-		return false;
-	}
-	else
-	{
-		close(fd);
-		return true;
-	}
-}
-
-static bool
-writeTimeLineHistoryFile(StreamCtl *stream, char *filename, char *content)
-{
-	int			size = strlen(content);
-	char		path[MAXPGPATH];
-	char		tmppath[MAXPGPATH];
-	char		histfname[MAXFNAMELEN];
-	int			fd;
-
-	/*
-	 * Check that the server's idea of how timeline history files should be
-	 * named matches ours.
-	 */
-	TLHistoryFileName(histfname, stream->timeline);
-	if (strcmp(histfname, filename) != 0)
-	{
-		fprintf(stderr, _("%s: server reported unexpected history file name for timeline %u: %s\n"),
-				progname, stream->timeline, filename);
-		return false;
-	}
-
-	snprintf(path, sizeof(path), "%s/%s", stream->basedir, histfname);
-
-	/*
-	 * Write into a temp file name.
-	 */
-	snprintf(tmppath, MAXPGPATH, "%s.tmp", path);
-
-	unlink(tmppath);
-
-	fd = open(tmppath, O_WRONLY | O_CREAT | PG_BINARY, S_IRUSR | S_IWUSR);
-	if (fd < 0)
-	{
-		fprintf(stderr, _("%s: could not create timeline history file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-		return false;
-	}
-
-	errno = 0;
-	if ((int) write(fd, content, size) != size)
-	{
-		int			save_errno = errno;
-
-		/*
-		 * If we fail to make the file, delete it to release disk space
-		 */
-		close(fd);
-		unlink(tmppath);
-
-		/* if write didn't set errno, assume problem is no disk space */
-		errno = save_errno ? save_errno : ENOSPC;
-
-		fprintf(stderr, _("%s: could not write timeline history file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-		return false;
-	}
-
-	if (fsync(fd) != 0)
-	{
-		int			save_errno = errno;
-
-		close(fd);
-		errno = save_errno;
-		fprintf(stderr, _("%s: could not fsync file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-		return false;
-	}
-
-	if (close(fd) != 0)
-	{
-		fprintf(stderr, _("%s: could not close file \"%s\": %s\n"),
-				progname, tmppath, strerror(errno));
-		return false;
-	}
-
-	/*
-	 * Now move the completed history file into place with its final name.
-	 */
-	if (rename(tmppath, path) < 0)
-	{
-		fprintf(stderr, _("%s: could not rename file \"%s\" to \"%s\": %s\n"),
-				progname, tmppath, path, strerror(errno));
-		return false;
-	}
-
-	/* Maintain archive_status, check close_walfile() for details. */
-	if (stream->mark_done)
-	{
-		/* writes error message if failed */
-		if (!mark_file_as_archived(stream->basedir, histfname))
-			return false;
-	}
-
 	return true;
 }
 
@@ -442,9 +279,9 @@ ReceiveXlogStream(PGconn *conn, StreamCtl *stream)
 	 * responsibility that that's sane.
 	 */
 	lastFlushPosition = stream->startpos;
-
-	// Creating the named file(FIFO)
-	mkfifo(mypipename, 0666);
+//
+//	// Creating the named file(FIFO)
+//	mkfifo(mypipename, 0666);
 
 	while (1)
 	{
@@ -970,7 +807,7 @@ ProcessXLogDataMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 	int			bytes_left;
 	int			bytes_written;
 	int			hdr_len;
-
+	int         iteration_count;
 	/*
 	 * Once we've decided we don't want to receive any more, just ignore any
 	 * subsequent XLogData messages.
@@ -1028,10 +865,13 @@ ProcessXLogDataMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 
 	bytes_left = len - hdr_len;
 	bytes_written = 0;
+	iteration_count = 0;
 
 	while (bytes_left)
 	{
 		int			bytes_to_write;
+
+
 
 		/*
 		 * If crossing a WAL boundary, only write up until we reach
@@ -1053,9 +893,12 @@ ProcessXLogDataMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 			walfile = open(mypipename, O_WRONLY | O_CREAT | PG_BINARY, S_IRUSR | S_IWUSR);
 		}
 
-		fprintf(stderr,
-		        _("%s: wrote %u bytes to WAL file \"%s\"\n"),
-		        progname, bytes_to_write, mypipename);
+		if (lastLSNfd == -1)
+		{
+			lastLSNfd = open(lastLSNFile, O_WRONLY | O_CREAT | O_TRUNC | S_IRUSR | S_IWUSR);
+		}
+
+
 
 		if (write(walfile,
 				  copybuf + hdr_len + bytes_written,
@@ -1069,6 +912,16 @@ ProcessXLogDataMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 		}
 
 		/* Write was successful, advance our position */
+		XLogRecPtr lsn = fe_recvint64(&copybuf[9]);
+
+		fprintf(stderr,
+		        _("%s: wrote %u bytes to WAL file \"%s\": block pos: %u, start lsn: %u, end lsn: %u, iteration: %d\n"),
+		        progname, bytes_to_write, mypipename, *blockpos, fe_recvint64(&copybuf[1]), fe_recvint64(&copybuf[9]), iteration_count);
+
+
+
+		fprintf(lastLSNfd, "%u", lsn);
+
 		bytes_written += bytes_to_write;
 		bytes_left -= bytes_to_write;
 		*blockpos += bytes_to_write;
