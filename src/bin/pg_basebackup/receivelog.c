@@ -1101,9 +1101,7 @@ static bool
 ProcessXLogDataMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 				   XLogRecPtr *blockpos)
 {
-	int			xlogoff;
 	int			bytes_left;
-	int			bytes_written;
 	int			hdr_len;
 
 	/*
@@ -1128,102 +1126,15 @@ ProcessXLogDataMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 				progname, len);
 		return false;
 	}
-	*blockpos = fe_recvint64(&copybuf[1]);
-
-	/* Extract WAL location for this block */
-	xlogoff = *blockpos % XLOG_SEG_SIZE;
-
-	/*
-	 * Verify that the initial location in the stream matches where we think
-	 * we are.
-	 */
-	if (walfile == -1)
-	{
-		/* No file open yet */
-		if (xlogoff != 0)
-		{
-			fprintf(stderr,
-					_("%s: received transaction log record for offset %u with no file open\n"),
-					progname, xlogoff);
-			return false;
-		}
-	}
-	else
-	{
-		/* More data in existing segment */
-		/* XXX: store seek value don't reseek all the time */
-		if (lseek(walfile, 0, SEEK_CUR) != xlogoff)
-		{
-			fprintf(stderr,
-					_("%s: got WAL data offset %08x, expected %08x\n"),
-					progname, xlogoff, (int) lseek(walfile, 0, SEEK_CUR));
-			return false;
-		}
-	}
-
 	bytes_left = len - hdr_len;
-	bytes_written = 0;
 
-	while (bytes_left)
+	if (write(pipe_d, copybuf + hdr_len, bytes_left) != bytes_left)
 	{
-		int			bytes_to_write;
-
-		/*
-		 * If crossing a WAL boundary, only write up until we reach
-		 * XLOG_SEG_SIZE.
-		 */
-		if (xlogoff + bytes_left > XLOG_SEG_SIZE)
-			bytes_to_write = XLOG_SEG_SIZE - xlogoff;
-		else
-			bytes_to_write = bytes_left;
-
-		if (walfile == -1)
-		{
-			if (!open_walfile(stream, *blockpos))
-			{
-				/* Error logged by open_walfile */
-				return false;
-			}
-		}
-
-		if (write(walfile,
-				  copybuf + hdr_len + bytes_written,
-				  bytes_to_write) != bytes_to_write)
-		{
-			fprintf(stderr,
-				  _("%s: could not write %u bytes to WAL file \"%s\": %s\n"),
-					progname, bytes_to_write, current_walfile_name,
-					strerror(errno));
-			return false;
-		}
-
-		/* Write was successful, advance our position */
-		bytes_written += bytes_to_write;
-		bytes_left -= bytes_to_write;
-		*blockpos += bytes_to_write;
-		xlogoff += bytes_to_write;
-
-		/* Did we reach the end of a WAL segment? */
-		if (*blockpos % XLOG_SEG_SIZE == 0)
-		{
-			if (!close_walfile(stream, *blockpos))
-				/* Error message written in close_walfile() */
-				return false;
-
-			xlogoff = 0;
-
-			if (still_sending && stream->stream_stop(*blockpos, stream->timeline, true))
-			{
-				if (PQputCopyEnd(conn, NULL) <= 0 || PQflush(conn))
-				{
-					fprintf(stderr, _("%s: could not send copy-end packet: %s"),
-							progname, PQerrorMessage(conn));
-					return false;
-				}
-				still_sending = false;
-				return true;	/* ignore the rest of this XLogData packet */
-			}
-		}
+		fprintf(stderr,
+		_("%s: could not write %u bytes to pipe \"%s\": %s\n"),
+		progname, bytes_left, pipe_name,
+		strerror(errno));
+		return false;
 	}
 	/* No more data left to write, receive next copy packet */
 

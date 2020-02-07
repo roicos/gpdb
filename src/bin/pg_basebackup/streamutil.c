@@ -44,6 +44,8 @@ char	   *dbname = NULL;
 int			dbgetpassword = 0;	/* 0=auto, -1=never, 1=always */
 static char *dbpassword = NULL;
 PGconn	   *conn = NULL;
+int         pipe_d = -1;
+char       *pipe_name = "/tmp/xlog_pipe";
 
 /*
  * Connect to the server. Returns a valid PGconn pointer if connected,

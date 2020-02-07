@@ -598,6 +598,28 @@ main(int argc, char **argv)
 	 * reuse it.
 	 */
 
+
+	/*
+	 * Create and open pipe for streaming. We will also reuse it in StreamLog().
+	 */
+
+	if(mkfifo(pipe_name, 0666) == -1){
+		fprintf(stderr,
+		_("%s: can not create a pipe %s: %s\n"),
+		progname, pipe_name, strerror(errno));
+		return false;
+	}
+
+	if(pipe_d == -1){
+		if ((pipe_d = open(pipe_name, O_WRONLY)) == -1)
+		{
+			fprintf(stderr,
+			_("%s: can not open a pipe %s\n"),
+			progname, pipe_name);
+			return false;
+		}
+	}
+
 	while (true)
 	{
 		StreamLog();

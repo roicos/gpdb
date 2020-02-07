@@ -25,6 +25,9 @@ extern char *dbname;
 extern int	dbgetpassword;
 extern char *replication_slot;
 
+extern int pipe_d;
+extern char * pipe_name;
+
 /* Connection kept global so we can disconnect easily */
 extern PGconn *conn;
 
