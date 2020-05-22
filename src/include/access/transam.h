@@ -138,7 +138,7 @@ extern int xid_stop_limit;
 extern int xid_warn_limit;
 
 extern bool EnableRestorePointRecoveryPause;
-
+extern bool DisableWalReceiver;
 
 /*
  * prototypes for functions in transam/transam.c

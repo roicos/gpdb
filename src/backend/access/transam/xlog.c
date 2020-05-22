@@ -114,6 +114,7 @@ int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 bool		EnableRestorePointRecoveryPause = false;
+bool		DisableWalReceiver = false;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -11991,7 +11992,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * that when we later jump backwards to start redo at
 					 * RedoStartLSN, we will have the logs streamed already.
 					 */
-					if (PrimaryConnInfo)
+					if (PrimaryConnInfo && !DisableWalReceiver)
 					{
 						XLogRecPtr	ptr;
 						TimeLineID	tli;
