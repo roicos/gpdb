@@ -2901,6 +2901,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"gp_force_gpsegconfig_dump_usage", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Force the query dispatcher to use the gpsegconfig_dump file instead of scanning the gp_segment_configuration table."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&ForceGpSegConfigDumpUsage,
+		false,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL

@@ -218,4 +218,6 @@ extern void AvoidCorefileGeneration(void);
        if (gp_log_gang >= GPVARS_VERBOSITY_DEBUG) elog(LOG, __VA_ARGS__); \
     } while(false);
 
+extern bool ForceGpSegConfigDumpUsage;
+
 #endif   /* CDBUTIL_H */

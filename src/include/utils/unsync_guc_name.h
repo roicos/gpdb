@@ -535,3 +535,4 @@
 		"ssl_renegotiation_limit",
 		"gp_enable_restore_point_recovery_pause",
 		"gp_disable_wal_receiver",
+		"gp_force_gpsegconfig_dump_usage",
