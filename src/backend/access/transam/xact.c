@@ -6857,7 +6857,9 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
  * because subtransaction commit is never WAL logged.
  */
 static void
-xact_redo_distributed_commit(uint8 info, xl_xact_commit *xlrec, TransactionId xid)
+xact_redo_distributed_commit(xl_xact_parsed_commit *parsed,
+							 TransactionId xid,
+							 XLogRecPtr lsn)
 {
 	TMGXACT_LOG gxact_log;
 	char gid[TMGIDSIZE];
@@ -6866,12 +6868,9 @@ xact_redo_distributed_commit(uint8 info, xl_xact_commit *xlrec, TransactionId xi
 
 	TransactionId max_xid;
 	int			i;
-	xl_xact_parsed_commit parsed;
 
-	ParseCommitRecord(info, xlrec, &parsed);
-
-	distribTimeStamp = parsed.distribTimeStamp;
-	distribXid = parsed.distribXid;
+	distribTimeStamp = parsed->distribTimeStamp;
+	distribXid = parsed->distribXid;
 
 	/* Construct the global transaction log */
 	snprintf(gid, TMGIDSIZE, "%u-%.10u", distribTimeStamp, distribXid);
@@ -6905,19 +6904,77 @@ xact_redo_distributed_commit(uint8 info, xl_xact_commit *xlrec, TransactionId xi
 		/* Mark the transaction committed in pg_clog */
 
 		/* Add the committed subtransactions to the DistributedLog, too. */
-		DistributedLog_SetCommittedTree(xid, parsed.nsubxacts, parsed.subxacts,
+		DistributedLog_SetCommittedTree(xid, parsed->nsubxacts, parsed->subxacts,
 										distribTimeStamp,
 										gxact_log.gxid,
 										/* isRedo */ true);
 
-		TransactionIdCommitTree(xid, parsed.nsubxacts, parsed.subxacts);
+		if (standbyState == STANDBY_DISABLED)
+		{
+			/*
+			 * Mark the transaction committed in pg_clog.
+			 */
+			TransactionIdCommitTree(xid, parsed->nsubxacts, parsed->subxacts);
+		}
+		else
+		{
+			max_xid = TransactionIdLatest(xid, parsed->nsubxacts, parsed->subxacts);
+
+			/*
+			 * If a transaction completion record arrives that has as-yet
+			 * unobserved subtransactions then this will not have been fully
+			 * handled by the call to RecordKnownAssignedTransactionIds() in the
+			 * main recovery loop in xlog.c. So we need to do bookkeeping again to
+			 * cover that case. This is confusing and it is easy to think this
+			 * call is irrelevant, which has happened three times in development
+			 * already. Leave it in.
+			 */
+			RecordKnownAssignedTransactionIds(max_xid);
+
+			/*
+			 * Mark the transaction committed in pg_clog. We use async commit
+			 * protocol during recovery to provide information on database
+			 * consistency for when users try to set hint bits. It is important
+			 * that we do not set hint bits until the minRecoveryPoint is past
+			 * this commit record. This ensures that if we crash we don't see hint
+			 * bits set on changes made by transactions that haven't yet
+			 * recovered. It's unlikely but it's good to be safe.
+			 */
+			TransactionIdAsyncCommitTree(
+				xid, parsed->nsubxacts, parsed->subxacts, lsn);
+
+			/*
+			 * We must mark clog before we update the ProcArray.
+			 */
+			ExpireTreeKnownAssignedTransactionIds(
+				xid, parsed->nsubxacts, parsed->subxacts, max_xid);
+
+			/*
+			 * Send any cache invalidations attached to the commit. We must
+			 * maintain the same order of invalidation then release locks as
+			 * occurs in CommitTransaction().
+			 */
+			ProcessCommittedInvalidationMessages(
+				parsed->msgs, parsed->nmsgs,
+				XactCompletionRelcacheInitFileInval(parsed->xinfo),
+				parsed->dbId, parsed->tsId);
+
+			/*
+			 * Release locks, if any. We do this for both two phase and normal one
+			 * phase transactions. In effect we are ignoring the prepare phase and
+			 * just going straight to lock release. At commit we release all locks
+			 * via their top-level xid only, so no need to provide subxact list,
+			 * which will save time when replaying commits.
+			 */
+			StandbyReleaseLockTree(xid, 0, NULL);
+		}
 
 		/* Make sure nextXid is beyond any XID mentioned in the record */
 		max_xid = xid;
-		for (i = 0; i < parsed.nsubxacts; i++)
+		for (i = 0; i < parsed->nsubxacts; i++)
 		{
-			if (TransactionIdPrecedes(max_xid, parsed.subxacts[i]))
-				max_xid = parsed.subxacts[i];
+			if (TransactionIdPrecedes(max_xid, parsed->subxacts[i]))
+				max_xid = parsed->subxacts[i];
 		}
 		if (TransactionIdFollowsOrEquals(max_xid,
 										 ShmemVariableCache->nextXid))
@@ -6926,9 +6983,9 @@ xact_redo_distributed_commit(uint8 info, xl_xact_commit *xlrec, TransactionId xi
 			TransactionIdAdvance(ShmemVariableCache->nextXid);
 		}
 
-		DropRelationFiles(parsed.xnodes, parsed.nrels, true);
-		DropDatabaseDirectories(parsed.deldbs, parsed.ndeldbs, true);
-		DoTablespaceDeletionForRedoXlog(parsed.tablespace_oid_to_delete_on_commit);
+		DropRelationFiles(parsed->xnodes, parsed->nrels, true);
+		DropDatabaseDirectories(parsed->deldbs, parsed->ndeldbs, true);
+		DoTablespaceDeletionForRedoXlog(parsed->tablespace_oid_to_delete_on_commit);
 	}
 
 	/*
@@ -7072,8 +7129,13 @@ xact_redo(XLogReaderState *record)
 	else if (info == XLOG_XACT_DISTRIBUTED_COMMIT)
 	{
 		xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
+		xl_xact_parsed_commit parsed;
 
-		xact_redo_distributed_commit(XLogRecGetInfo(record), xlrec, XLogRecGetXid(record));
+		ParseCommitRecord(XLogRecGetInfo(record), xlrec,
+						  &parsed);
+
+		xact_redo_distributed_commit(&parsed, XLogRecGetXid(record),
+									record->EndRecPtr);
 	}
 	else if (info == XLOG_XACT_DISTRIBUTED_FORGET)
 	{
