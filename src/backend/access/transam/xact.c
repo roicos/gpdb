@@ -2325,13 +2325,6 @@ StartTransaction(void)
 	AtStart_ResourceOwner();
 
 	/*
-	 * Transactions may be started while recovery is in progress, if
-	 * hot standby is enabled.  This mode is not supported in
-	 * Greenplum yet.
-	 */
-	AssertImply(DistributedTransactionContext != DTX_CONTEXT_LOCAL_ONLY,
-				!s->startedInRecovery);
-	/*
 	 * MPP Modification
 	 *
 	 * If we're an executor and don't have a valid QDSentXID, then we're starting
