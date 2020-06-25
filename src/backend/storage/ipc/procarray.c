@@ -1992,7 +1992,12 @@ CreateDistributedSnapshot(DistributedSnapshot *ds)
 
 	Assert(LWLockHeldByMe(ProcArrayLock));
 	if (*shmNumCommittedGxacts != 0)
-		elog(ERROR, "Create distributed snapshot before DTM recovery finish");
+	{
+		if (EnableHotStandby)
+			elog(ERROR, "a distributed transaction is currently being replayed");
+		else
+			elog(ERROR, "Create distributed snapshot before DTM recovery finish");
+	}
 
 	xmin = xmax = ShmemVariableCache->latestCompletedDxid + 1;
 
