@@ -5497,7 +5497,8 @@ getRecordTimestamp(XLogReaderState *record, TimestampTz *recordXtime)
 		return true;
 	}
 	if (rmid == RM_XACT_ID && (xact_info == XLOG_XACT_COMMIT ||
-							   xact_info == XLOG_XACT_COMMIT_PREPARED))
+							   xact_info == XLOG_XACT_COMMIT_PREPARED ||
+							   xact_info == XLOG_XACT_DISTRIBUTED_COMMIT))
 	{
 		*recordXtime = ((xl_xact_commit *) XLogRecGetData(record))->xact_time;
 		return true;
@@ -5687,7 +5688,9 @@ recoveryStopsAfter(XLogReaderState *record)
 	if (xact_info == XLOG_XACT_COMMIT ||
 		xact_info == XLOG_XACT_COMMIT_PREPARED ||
 		xact_info == XLOG_XACT_ABORT ||
-		xact_info == XLOG_XACT_ABORT_PREPARED)
+		xact_info == XLOG_XACT_ABORT_PREPARED ||
+		xact_info == XLOG_XACT_DISTRIBUTED_COMMIT ||
+		xact_info == XLOG_XACT_DISTRIBUTED_FORGET)
 	{
 		TransactionId recordXid;
 
