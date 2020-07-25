@@ -88,6 +88,7 @@ static int	CdbComponentDatabaseInfoCompare(const void *p1, const void *p2);
 
 static GpSegConfigEntry * readGpSegConfigFromCatalog(int *total_dbs);
 static GpSegConfigEntry * readGpSegConfigFromFTSFiles(int *total_dbs);
+static GpSegConfigEntry * readGpSegConfigFromExternal(int *total_dbs);
 
 static void getAddressesForDBid(GpSegConfigEntry *c, int elevel);
 static HTAB *hostSegsHashTableInit(void);
@@ -97,6 +98,8 @@ static int nextQEIdentifer(CdbComponentDatabases *cdbs);
 static HTAB *segment_ip_cache_htab = NULL;
 
 int numsegmentsFromQD = -1;
+
+char *ExternalGpsegconfigConnInfo = NULL;
 
 typedef struct SegIpEntry
 {
@@ -230,6 +233,67 @@ writeGpSegConfigToFTSFiles(void)
 }
 
 static GpSegConfigEntry *
+readGpSegConfigFromExternal(int *total_dbs)
+{
+	PGconn	   *tmpconn;
+	GpSegConfigEntry	*configs;
+	GpSegConfigEntry	*config;
+	int					array_size;
+	int                 i;
+
+	array_size = 500;
+	configs = palloc0(sizeof(GpSegConfigEntry) * array_size);
+	PGresult    *result;
+
+	tmpconn = PQconnectdb(ExternalGpsegconfigConnInfo);
+	if (!tmpconn)
+	{
+		elog(ERROR, "could not connect to server");
+	}
+
+	if (PQstatus(tmpconn) != CONNECTION_OK)
+	{
+		PQfinish(tmpconn);
+		elog(ERROR, "could not connect to server: %s", PQerrorMessage(tmpconn));
+	}
+
+	result = PQexec(tmpconn, "select * from gp_segment_configuration");
+	if (PQresultStatus(result) != PGRES_TUPLES_OK)
+	{
+		PQclear(result);
+		PQfinish(tmpconn);
+		elog(ERROR, "result is incorrect: %s", PQerrorMessage(tmpconn));
+	}
+	if (PQntuples(result) <= 0 || PQnfields(result) != Natts_gp_segment_configuration)
+	{
+		PQclear(result);
+		elog(ERROR, "result is incorrect");
+	}
+
+	for (i=0; i<PQntuples(result); i++)
+	{
+		config = &configs[i];
+		config->dbid = atoi(PQgetvalue(result, i, Anum_gp_segment_configuration_dbid-1));
+		config->segindex = atoi(PQgetvalue(result, i, Anum_gp_segment_configuration_content-1));
+		config->role = PQgetvalue(result, i, Anum_gp_segment_configuration_role-1)[0];
+		config->preferred_role = PQgetvalue(result, i, Anum_gp_segment_configuration_preferred_role-1)[0];
+		config->mode = PQgetvalue(result, i, Anum_gp_segment_configuration_mode-1)[0];
+		config->status = PQgetvalue(result, i, Anum_gp_segment_configuration_status-1)[0];
+		config->port = atoi(PQgetvalue(result, i, Anum_gp_segment_configuration_port-1));
+		config->hostname = pstrdup(PQgetvalue(result, i, Anum_gp_segment_configuration_hostname-1));
+		config->address = pstrdup(PQgetvalue(result, i, Anum_gp_segment_configuration_address-1));
+		config->datadir = pstrdup(PQgetvalue(result, i, Anum_gp_segment_configuration_datadir-1));
+
+	}
+
+	*total_dbs = i;
+
+	PQclear(result);
+	PQfinish(tmpconn);
+	return configs;
+}
+
+static GpSegConfigEntry *
 readGpSegConfigFromCatalog(int *total_dbs)
 {
 	int					idx = 0;
@@ -352,7 +416,10 @@ getCdbComponentInfo(void)
 
 	HTAB	   *hostSegsHash = hostSegsHashTableInit();
 
-	if (IsTransactionState())
+	if (ExternalGpsegconfigConnInfo != NULL &&
+		strcmp(ExternalGpsegconfigConnInfo, "") > 0)
+		configs = readGpSegConfigFromExternal(&total_dbs);
+	else if (IsTransactionState())
 		configs = readGpSegConfigFromCatalog(&total_dbs);
 	else
 		configs = readGpSegConfigFromFTSFiles(&total_dbs);

@@ -4357,6 +4357,16 @@ struct config_string ConfigureNamesString_gp[] =
 		GP_VERSION,
 		NULL, NULL, NULL
 	},
+	{
+		{"external_gpsegconfig_conninfo", PGC_SIGHUP, DEVELOPER_OPTIONS,
+		 gettext_noop("Sets the connection string to be used to connect external gp_segment_configuration."),
+		 NULL,
+		 GUC_SUPERUSER_ONLY
+		},
+		&ExternalGpsegconfigConnInfo,
+		"",
+		NULL, NULL, NULL
+	},
 
 #ifdef ENABLE_IC_PROXY
 	{

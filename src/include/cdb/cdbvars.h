@@ -749,4 +749,6 @@ extern bool gp_create_table_random_default_distribution;
 /* Functions in guc_gp.c to lookup values in enum GUCs */
 extern const char * lookup_autostats_mode_by_value(GpAutoStatsModeValue val);
 
+extern char *ExternalGpsegconfigConnInfo;
+
 #endif   /* CDBVARS_H */

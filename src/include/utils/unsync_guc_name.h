@@ -125,6 +125,7 @@
 		"event_source",
 		"exit_on_error",
 		"external_pid_file",
+		"external_gpsegconfig_conninfo",
 		"extra_float_digits",
 		"from_collapse_limit",
 		"fsync",
