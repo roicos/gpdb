@@ -388,8 +388,11 @@ if [ "${BLDWRAP_POSTGRES_CONF_ADDONS}" != "__none__" ]  && \
 fi
 
 # photon requires explicitly setting locale during gpinitsystem
-if [ -f /etc/os-release ] && [ grep -q photon /etc/os-release ]; then
-    LOCALE_OPTS="-n en_US.UTF-8"
+if [ -f /etc/os-release ]; then
+    grep -q photon /etc/os-release
+    if [[ $? -eq 0 ]]; then
+        LOCALE_OPTS="-n en_US.UTF-8"
+    fi
 fi
 
 if [ -f "${CLUSTER_CONFIG_POSTGRES_ADDONS}" ]; then
